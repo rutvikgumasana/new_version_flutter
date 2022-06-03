@@ -112,6 +112,11 @@ class NewVersion {
     }
   }
 
+  /// This function attempts to clean local version strings so they match the MAJOR.MINOR.PATCH
+  /// versioning pattern, so they can be properly compared with the store version.
+  String _getCleanVersion(String version) =>
+      RegExp(r'\d+\.\d+\.\d+').stringMatch(version) ?? '0.0.0';
+
   /// iOS info is fetched by using the iTunes lookup API, which returns a
   /// JSON document.
   Future<VersionStatus?> _getiOSStoreVersion(PackageInfo packageInfo) async {
@@ -133,8 +138,9 @@ class NewVersion {
       return null;
     }
     return VersionStatus._(
-      localVersion: packageInfo.version,
-      storeVersion: forceAppVersion ?? jsonObj['results'][0]['version'],
+      localVersion: _getCleanVersion(packageInfo.version),
+      storeVersion:
+          _getCleanVersion(forceAppVersion ?? jsonObj['results'][0]['version']),
       appStoreLink: jsonObj['results'][0]['trackViewUrl'],
       releaseNotes: jsonObj['results'][0]['releaseNotes'],
     );
@@ -144,8 +150,8 @@ class NewVersion {
   Future<VersionStatus?> _getAndroidStoreVersion(
       PackageInfo packageInfo) async {
     final id = androidId ?? packageInfo.packageName;
-    final uri = Uri.https(
-        "play.google.com", "/store/apps/details", {"id": "$id", "gl": "US"});
+    final uri =
+        Uri.https("play.google.com", "/store/apps/details", {"id": "$id"});
     final response = await http.get(uri);
     if (response.statusCode != 200) {
       debugPrint('Can\'t find an app in the Play Store with the id: $id');
@@ -153,28 +159,86 @@ class NewVersion {
     }
     final document = parse(response.body);
 
-    final additionalInfoElements = document.getElementsByClassName('hAyfc');
-    final versionElement = additionalInfoElements.firstWhere(
-      (elm) => elm.querySelector('.BgcNfc')!.text == 'Current Version',
-    );
-    final storeVersion = versionElement.querySelector('.htlgb')!.text;
+    String storeVersion = '0.0.0';
+    String? releaseNotes;
 
-    final sectionElements = document.getElementsByClassName('W4P4ne');
-    final releaseNotesElement = sectionElements.firstWhereOrNull(
-      (elm) => elm.querySelector('.wSaTQd')!.text == 'What\'s New',
-    );
-    final releaseNotes = releaseNotesElement
-        ?.querySelector('.PHBdkd')
-        ?.querySelector('.DWPxHb')
-        ?.text;
+    final additionalInfoElements = document.getElementsByClassName('hAyfc');
+    if (additionalInfoElements.isNotEmpty) {
+      final versionElement = additionalInfoElements.firstWhere(
+        (elm) => elm.querySelector('.BgcNfc')!.text == 'Current Version',
+      );
+      storeVersion = versionElement.querySelector('.htlgb')!.text;
+
+      final sectionElements = document.getElementsByClassName('W4P4ne');
+      final releaseNotesElement = sectionElements.firstWhereOrNull(
+        (elm) => elm.querySelector('.wSaTQd')!.text == 'What\'s New',
+      );
+      releaseNotes = releaseNotesElement
+          ?.querySelector('.PHBdkd')
+          ?.querySelector('.DWPxHb')
+          ?.text;
+    } else {
+      final scriptElements = document.getElementsByTagName('script');
+      final infoScriptElement = scriptElements.firstWhere(
+        (elm) => elm.text.contains('key: \'ds:4\''),
+      );
+
+      final param = infoScriptElement.text
+          .substring(20, infoScriptElement.text.length - 2)
+          .replaceAll('key:', '"key":')
+          .replaceAll('hash:', '"hash":')
+          .replaceAll('data:', '"data":')
+          .replaceAll('sideChannel:', '"sideChannel":')
+          .replaceAll('\'', '"')
+          .replaceAll('owners\"', 'owners');
+      final parsed = json.decode(param);
+      final data = parsed['data'];
+
+      storeVersion = data[1][2][140][0][0][0];
+      releaseNotes = data[1][2][144][1][1];
+    }
 
     return VersionStatus._(
-      localVersion: packageInfo.version,
-      storeVersion: forceAppVersion ?? storeVersion,
+      localVersion: _getCleanVersion(packageInfo.version),
+      storeVersion: _getCleanVersion(forceAppVersion ?? storeVersion),
       appStoreLink: uri.toString(),
       releaseNotes: releaseNotes,
     );
   }
+  // Future<VersionStatus?> _getAndroidStoreVersion(
+  //     PackageInfo packageInfo) async {
+  //   final id = androidId ?? packageInfo.packageName;
+  //   final uri =
+  //       Uri.https("play.google.com", "/store/apps/details", {"id": "$id"});
+  //   final response = await http.get(uri);
+  //   if (response.statusCode != 200) {
+  //     debugPrint('Can\'t find an app in the Play Store with the id: $id');
+  //     return null;
+  //   }
+  //   final document = parse(response.body);
+
+  //   final additionalInfoElements = document.getElementsByClassName('hAyfc');
+  //   final versionElement = additionalInfoElements.firstWhere(
+  //     (elm) => elm.querySelector('.BgcNfc')!.text == 'Current Version',
+  //   );
+  //   final storeVersion = versionElement.querySelector('.htlgb')!.text;
+
+  //   final sectionElements = document.getElementsByClassName('W4P4ne');
+  //   final releaseNotesElement = sectionElements.firstWhereOrNull(
+  //     (elm) => elm.querySelector('.wSaTQd')!.text == 'What\'s New',
+  //   );
+  //   final releaseNotes = releaseNotesElement
+  //       ?.querySelector('.PHBdkd')
+  //       ?.querySelector('.DWPxHb')
+  //       ?.text;
+
+  //   return VersionStatus._(
+  //     localVersion: _getCleanVersion(packageInfo.version),
+  //     storeVersion: _getCleanVersion(forceAppVersion ?? storeVersion),
+  //     appStoreLink: uri.toString(),
+  //     releaseNotes: releaseNotes,
+  //   );
+  // }
 
   /// Shows the user a platform-specific alert about the app update. The user
   /// can dismiss the alert or proceed to the app store.
